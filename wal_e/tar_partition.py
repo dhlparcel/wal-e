@@ -55,12 +55,43 @@ from wal_e.exception import UserException
 
 logger = log_help.WalELogger(__name__)
 
-PG_CONF = ('postgresql.conf',
-           'pg_hba.conf',
-           'recovery.conf',
-           'recovery.done',
-           'pg_ident.conf',
-           'promote')
+#
+# DIRECT backup is performed from the actual PG_CLUSTER_DIRECTORY
+#
+# HYBRID backup is initiated from a standby/slave server, but takes data
+# from master into a fresh directory using pg_basebackup call with --host
+# parameter there can be pg_xlog entries created during that process, so
+# they have to be taken into base backup tar file
+#
+
+IGNORE_FILES_DIRECT_BACKUP = ('postgresql.conf',
+                              'pg_hba.conf',
+                              'recovery.conf',
+                              'recovery.done',
+                              'pg_ident.conf',
+                              'promote')
+
+IGNORE_DIRECTORIES_DIRECT_BACKUP = ['pg_xlog',
+                                    'pg_log',
+                                    'pg_replslot',
+                                    'pg_wal']
+
+IGNORE_FILES_HYBRID_BACKUP = ('postgresql.conf',
+                              'pg_hba.conf',
+                              'recovery.done',
+                              'pg_ident.conf',
+                              'promote')
+
+IGNORE_DIRECTORIES_HYBRID_BACKUP = ['pg_log',
+                                    'pg_replslot',
+                                    'pg_wal']
+
+
+def _determine_ignored(hybrid_backup):
+    if hybrid_backup:
+        return IGNORE_FILES_HYBRID_BACKUP, IGNORE_DIRECTORIES_HYBRID_BACKUP
+    else:
+        return IGNORE_FILES_DIRECT_BACKUP, IGNORE_DIRECTORIES_DIRECT_BACKUP
 
 
 class StreamPadFileObj(object):
@@ -450,9 +481,10 @@ def do_not_descend(root, name, dirnames, matches):
         matches.append(os.path.join(root, name))
 
 
-def partition(pg_cluster_dir):
+def partition(pg_cluster_dir, hybrid_backup=False):
     def raise_walk_error(e):
         raise e
+
     if not pg_cluster_dir.endswith(os.path.sep):
         pg_cluster_dir += os.path.sep
 
@@ -462,6 +494,8 @@ def partition(pg_cluster_dir):
     # Maintain a manifest of archived files. Tra
     spec = {'base_prefix': pg_cluster_dir,
             'tablespaces': []}
+
+    (IGNORE_FILES, IGNORE_DIRECTORIES) = _determine_ignored(hybrid_backup)
 
     walker = os.walk(pg_cluster_dir, onerror=raise_walk_error)
     for root, dirnames, filenames in walker:
@@ -474,7 +508,7 @@ def partition(pg_cluster_dir):
         matches.append(root)
 
         if is_cluster_toplevel:
-            for name in ['pg_xlog', 'pg_log', 'pg_replslot', 'pg_wal']:
+            for name in IGNORE_DIRECTORIES:
                 do_not_descend(root, name, dirnames, matches)
 
         # Do not capture any TEMP Space files, although we do want to capture
@@ -500,7 +534,7 @@ def partition(pg_cluster_dir):
                 # Do not include the postmaster pid file or the
                 # configuration file in the backup.
                 pass
-            elif is_cluster_toplevel and filename in PG_CONF:
+            elif is_cluster_toplevel and filename in IGNORE_FILES:
                 # Do not include config files in the backup
                 pass
             else:

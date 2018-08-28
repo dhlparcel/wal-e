@@ -169,6 +169,7 @@ class Backup(object):
         backup_stop_good = False
         while_offline = False
         start_backup_info = None
+        hybrid_backup = False
 
         if 'while_offline' in kwargs:
             while_offline = kwargs.pop('while_offline')
@@ -183,17 +184,21 @@ class Backup(object):
             else:
                 if pg_basebackup_access and not while_offline:
                     user, host = pg_basebackup_access.split("@")
-                    PgBackupStatements.run_pg_basebackup(user, host, data_directory)
+                    PgBackupStatements.run_pg_basebackup(user, host,
+                                                         data_directory)
+                    hybrid_backup = True
                 else:
                     if os.path.exists(os.path.join(data_directory,
                                                    'postmaster.pid')):
                         hint = ('Shut down postgres.  '
                                 'If there is a stale lockfile, '
-                                'then remove it after being very sure postgres '
-                                'is not running.')
+                                'then remove it after being '
+                                'very sure postgres is not running.')
                         raise UserException(
-                            msg='while_offline set, but pg looks to be running',
-                            detail='Found a postmaster.pid lockfile, and aborting',
+                            msg='while_offline set, but pg '
+                                'looks to be running',
+                            detail='Found a postmaster.pid '
+                                   'lockfile, and aborting',
                             hint=hint)
 
                 ctrl_data = PgControlDataParser(data_directory)
@@ -201,8 +206,9 @@ class Backup(object):
                 version = ctrl_data.pg_version()
 
             ret_tuple = self._upload_pg_cluster_dir(
-                start_backup_info, data_directory, version=version, *args,
-                **kwargs)
+                start_backup_info, data_directory, version=version,
+                hybrid_backup=hybrid_backup,
+                *args, **kwargs)
             spec, uploaded_to, expanded_size_bytes = ret_tuple
             upload_good = True
         finally:
@@ -436,7 +442,8 @@ class Backup(object):
         return bl
 
     def _upload_pg_cluster_dir(self, start_backup_info, pg_cluster_dir,
-                               version, pool_size, rate_limit=None):
+                               version, pool_size, rate_limit=None,
+                               hybrid_backup=False):
         """
         Upload to url_prefix from pg_cluster_dir
 
@@ -464,7 +471,7 @@ class Backup(object):
         (which affect upload throughput) would help.
 
         """
-        spec, parts = tar_partition.partition(pg_cluster_dir)
+        spec, parts = tar_partition.partition(pg_cluster_dir, hybrid_backup)
 
         # TODO :: Move arbitray path construction to StorageLayout Object
         backup_prefix = '{0}/basebackups_{1}/base_{file_name}_{file_offset}'\
